@@ -1,0 +1,17 @@
+# Text Editor configuration.
+#
+# See http://editorconfig.org for details and a complete list of supported
+# platforms.
+
+# This file is read top to bottom;
+# the most recent rules found take precedence.
+
+root = true
+
+[{*.{editorconfig,rb},Rakefile}]
+charset = utf-8
+indent_style = space
+indent_size = 2
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
