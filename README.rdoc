@@ -9,13 +9,13 @@ Value class for SMPTE timecode information
 == SYNOPSIS:
 
   tc = Timecode.parse("00:00:10:12", fps = 25)
-  tc.total #=> 262
+  tc.total #=> 262.0
   
   Drop frame
   tc = Timecode.parse("00:00:10;12", fps = 29.97)
   
-  plus_ten = tc + Timecode.parse("10h", fps = 25)
-  plus_ten #=> "10:00:10:12"
+  plus_ten = tc + Timecode.from_seconds(10 * 36000, fps = 29.97, true)
+  plus_ten #=> #<Timecode:100:00:10:12 (10789512F@29.97)>
 
 == INSTALL:
 

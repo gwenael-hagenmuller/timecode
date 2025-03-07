@@ -42,7 +42,8 @@ describe "Timecode.new should" do
   end
 
   it 'calculates seconds correctly for rational fps' do
-    _(Timecode.new(548999, 23.976).seconds).must_equal 14
+    _(Timecode.new(548999, 24).seconds).must_equal 14
+    _(Timecode.new(548999, 23.976).seconds).must_equal 37
     _(Timecode.new(9662, 29.97, true).seconds).must_equal 22
     _(Timecode.new(1078920, 29.97, true).seconds).must_equal 0
   end
@@ -235,12 +236,12 @@ describe "Timecode#to_seconds should" do
   it "properly roundtrip a value via Timecode.from_seconds" do
     secs_in = 19.76
     from_secs = Timecode.from_seconds(secs_in, 25.0)
-    _(from_secs.total).must_equal 494
+    _(from_secs.total).must_be_within_delta 494, 0.001
     _(from_secs.to_seconds).must_be_within_delta secs_in, 0.001
 
     secs_in = 15603.50
     from_secs = Timecode.from_seconds(secs_in, 29.97, true)
-    _(from_secs.total).must_equal 467637
+    _(from_secs.total).must_be_within_delta 467637, 0.001
     _(from_secs.to_seconds).must_be_within_delta secs_in, 0.005
   end
 end
@@ -257,7 +258,11 @@ describe "An existing Timecode on inspection should" do
 
   it "properly print itself with DF" do
     _(Timecode.new(9662, 29.97, true).to_s).must_equal "00:05:22;12"
-    _(Timecode.new(9662, 29.97, false).to_s).must_equal "00:05:22:02"
+    # 9662 frames at 29.97 fps:
+    # (9662 / (60 * 29.97)).floor = 5min
+    # ((9662 % (60 * 29.97)) / 29.97).floor = 22
+    # (9662 % (60 * 29.97)) % 29.97 = 11.6600...
+    _(Timecode.new(9662, 29.97, false).to_s).must_equal "00:05:22:11"
   end
 end
 
@@ -290,7 +295,8 @@ describe "A Timecode on conversion should" do
     _(at24.total).must_equal 1800
     at29 = tc.convert(29.97)
     _(at29.total).must_equal 1800
-    _(at29.to_s).must_equal "00:01:00:00"
+    # 1800 frames at 29.97 frames per second (no frames dropped) => 1800/29.97 = 60.06sec = 60sec + (1800.0 / 29.97 - 60) * 29.97 frames = 60sec + 1.8 frames
+    _(at29.to_s).must_equal "00:01:00:01"
     at29DF = tc.convert(29.97, true)
     _(at29DF.total).must_equal 1800
     _(at29DF.to_s).must_equal "00:01:00;02"
@@ -301,7 +307,8 @@ describe "A Timecode on conversion should" do
     _(at29.to_s).must_equal "00:01:00;02"
     at29ND = tc1.convert(29.97, false)
     _(at29ND.total).must_equal 1800
-    _(at29ND.to_s).must_equal "00:01:00:00"
+    # 1800 frames at 29.97 frames per second (no frames dropped) => 1800/29.97 = 60.06sec = 60sec + (1800.0 / 29.97 - 60) * 29.97 frames = 60sec + 1.8 frames
+    _(at29ND.to_s).must_equal "00:01:00:01"
   end
 end
 
@@ -587,18 +594,50 @@ describe "Timecode.parse should" do
     tc = Timecode.parse_with_fractional_seconds(fraction, 10)
     _(tc.to_s).must_equal "00:00:07:05"
 
-    fraction = "00:00:07.04"
+    fraction = "00:00:07.08"
     tc = Timecode.parse_with_fractional_seconds(fraction, 12.5)
-    _(tc.to_s).must_equal "00:00:07:00"
+    _(tc.to_s).must_equal "00:00:07:01"
 
     fraction = "00:00:07.16"
     tc = Timecode.parse_with_fractional_seconds(fraction, 12.5)
     _(tc.to_s).must_equal "00:00:07:02"
   end
 
+  it "parse timecode with ticks of a second instead of frames" do
+    tc_with_ticks = "00:00:07:001"
+    tc = Timecode.parse_with_ticks(tc_with_ticks, 10)
+    _(tc.to_s).must_equal "00:00:07:00"
+
+    tc_with_ticks = "00:00:07:050"
+    tc = Timecode.parse_with_ticks(tc_with_ticks, 10)
+    _(tc.to_s).must_equal "00:00:07:02"
+
+    tc_with_ticks = "00:00:07:149"
+    tc = Timecode.parse_with_ticks(tc_with_ticks, 12.5)
+    _(tc.to_s).must_equal "00:00:07:07"
+
+    tc_with_ticks = "00:00:07:217"
+    tc = Timecode.parse_with_ticks(tc_with_ticks, 12.5)
+    _(tc.to_s).must_equal "00:00:07:10"
+  end
+
   it "reports DF timecode" do
     df_tc = "00:00:00;01"
     _(Timecode.parse(df_tc, 29.97).drop?).must_equal true
+  end
+
+  it "raise on unsupported fraction of seconds" do
+    fraction = "00:00:07.149"
+    _(lambda { Timecode.parse_with_fractional_seconds(fraction, 12.5, false) }).must_raise Timecode::CannotParse
+    tc = Timecode.parse_with_fractional_seconds(fraction, 12.5, true)
+    _(tc.to_s).must_equal "00:00:07:01"
+  end
+
+  it "raise on unsupported ticks of a second" do
+    tc_with_ticks = "00:00:07.050"
+    _(lambda { Timecode.parse_with_ticks(tc_with_ticks, 12.5, false) }).must_raise Timecode::CannotParse
+    tc = Timecode.parse_with_ticks(tc_with_ticks, 12.5, true)
+    _(tc.to_s).must_equal "00:00:07:00"
   end
 
   it "raise on improper format" do
@@ -618,12 +657,7 @@ describe "Timecode.parse should" do
     _(Timecode.parse( "00:10:00;00", 29.97).total).must_equal 17982
   end
 
-  it "handle non integer fps without being accurate" do
-    _(Timecode.parse( "15:25:13:01", 24000.0/1001.0).total).must_equal 1332313
-  end
-
   it "properly handle non integer fps" do
-    skip "non integer fps aren't not handled properly - this test fails whereas it should pass"
     _(Timecode.parse( "15:25:13:01", 24000.0/1001.0).total).must_be_within_delta 1330982, 0.02
   end
 end

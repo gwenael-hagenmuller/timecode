@@ -13,12 +13,11 @@
 require "approximately"
 require File.dirname(__FILE__) + '/timecode/version'
 class Timecode
-  
+
   class ComputationValues
     attr_reader :drop_count, :frames_per_min, :frames_per_10_min, :frames_per_hour, :nd_frames_per_min
-    
+
     def initialize(fps, drop_frame)
-      rounded_base = fps.round
       if (drop_frame)
         # first 2 frame numbers shall be omitted at the start of each minute,
         # except minutes 0, 10, 20, 30, 40 and 50
@@ -27,15 +26,17 @@ class Timecode
           @drop_count *= 2
         end
 
-        @frames_per_min = rounded_base * 60 - @drop_count
+        fps = fps.round
+
+        @frames_per_min = fps * 60 - @drop_count
         @frames_per_10_min = @frames_per_min * 10 + @drop_count
       else
-        @frames_per_min = rounded_base * 60
+        @frames_per_min = fps * 60
         @frames_per_10_min = @frames_per_min * 10
       end
 
       @frames_per_hour = @frames_per_10_min * 6
-      @nd_frames_per_min = rounded_base * 60
+      @nd_frames_per_min = fps * 60
     end
   end
 
@@ -85,20 +86,23 @@ class Timecode
 
   # Gets raised when you try to compute two timecodes with different framerates together
   class WrongFramerate < ArgumentError; end
-  
+
   # Gets raised when you try to compute two timecodes with different drop frame flag together
   class WrongDropFlag < ArgumentError; end
 
-  # Initialize a new Timecode object with a certain amount of frames, a framerate and an optional drop frame flag 
+  # Initialize a new Timecode object with a certain amount of frames, a framerate and an optional drop frame flag
   # will be interpreted as the total number of frames
   def initialize(total = 0, fps = DEFAULT_FPS, drop_frame = false)
-    raise WrongFramerate, "FPS cannot be zero" if fps.zero?
-    self.class.check_framerate!(fps)
-    # If total is a string, use parse
-    raise RangeError, "Timecode cannot be negative" if total.to_i < 0
-    # Always cast framerate to float, and num of frames to integer
-    @total, @fps = total.to_i, fps.to_f
     @drop_frame = drop_frame
+    # Always cast framerate to float
+    @fps = fps.to_f
+    # Cast num of frames to integer or to float
+    @total = drop_frame ? total.to_i : total.to_f
+
+    raise WrongFramerate, "FPS cannot be zero" if @fps.zero?
+    self.class.check_framerate!(@fps)
+    # If total is a string, use parse
+    raise RangeError, "Timecode cannot be negative" if @total < 0
     @value = validate!
     freeze
   end
@@ -146,7 +150,7 @@ class Timecode
     # Parses the timecode contained in a passed filename as frame number in a sequence
     def from_filename_in_sequence(filename_with_or_without_path, fps = DEFAULT_FPS)
       b = File.basename(filename_with_or_without_path)
-      number = b.scan(/\d+/).flatten[-1].to_i
+      number = b.scan(/\d+/).flatten[-1]
       new(number, fps)
     end
 
@@ -155,7 +159,7 @@ class Timecode
     # * 10h 20m 10s 1f (or any combination thereof) - will be disassembled to hours, frames, seconds and so on automatically
     # * 123 - will be parsed as 00:00:01:23
     # * 00:00:00:00 - will be parsed as zero TC
-    def parse(spaced_input, with_fps = DEFAULT_FPS)
+    def parse(spaced_input, with_fps = DEFAULT_FPS, allow_inaccurate = true)
       input = spaced_input.strip
 
       # 00:00:00;00
@@ -172,10 +176,10 @@ class Timecode
         return at(*atoms_and_fps)
       # 00:00:00.0
       elsif input =~ FRACTIONAL_TC_RE
-        parse_with_fractional_seconds(input, with_fps)
+        parse_with_fractional_seconds(input, with_fps, allow_inaccurate)
       # 00:00:00:000
       elsif input =~ TICKS_TC_RE
-        parse_with_ticks(input, with_fps)
+        parse_with_ticks(input, with_fps, allow_inaccurate)
       # 10h 20m 10s 1f 00:00:00:01 - space separated is a sum of parts
       elsif input =~ /\s/
         parts = input.gsub(/\s/, ' ').split.reject{|e| e.strip.empty? }
@@ -212,17 +216,18 @@ class Timecode
       if drop_frame && secs == 0 && (mins % 10 > 0) && (frames < comp.drop_count)
         frames = comp.drop_count
       end
-      
-      total = hrs * comp.frames_per_hour
+
       if drop_frame
+        total = hrs * comp.frames_per_hour
         total += (mins / 10) * comp.frames_per_10_min
         total += (mins % 10) * comp.frames_per_min
+        rounded_base = with_fps.round
+        total += secs * rounded_base
+        total += frames
       else
-        total += mins * comp.frames_per_min
+        total = (hrs * 3600 + mins * 60 + secs) * with_fps + frames
       end
-      rounded_base = with_fps.round
-      total += secs * rounded_base
-      total += frames
+
       new(total, with_fps, drop_frame)
     end
 
@@ -242,12 +247,20 @@ class Timecode
 
     # Parse a timecode with fractional seconds instead of frames. This is how ffmpeg reports
     # a timecode
-    def parse_with_fractional_seconds(tc_with_fractions_of_second, fps = DEFAULT_FPS)
+    def parse_with_fractional_seconds(tc_with_fractions_of_second, fps = DEFAULT_FPS, allow_inaccurate = true)
       fraction_expr = /[\.,](\d+)$/
       fraction_part = ('.' + tc_with_fractions_of_second.scan(fraction_expr)[0][0]).to_f
 
       seconds_per_frame = 1.0 / fps.to_f
-      frame_idx = (fraction_part / seconds_per_frame).floor
+      frame_idx = fraction_part / seconds_per_frame
+
+      if frame_idx.floor != frame_idx
+        if allow_inaccurate
+          frame_idx = frame_idx.floor
+        else
+          raise CannotParse, "'#{fraction_part}' isn't supported since at this frame rate '#{fps}' it doesn't give an integer for the number of frames"
+        end
+      end
 
       tc_with_frameno = tc_with_fractions_of_second.gsub(fraction_expr, ":%02d" % frame_idx)
 
@@ -257,14 +270,23 @@ class Timecode
     # Parse a timecode with ticks of a second instead of frames. A 'tick' is defined as
     # 4 msec and has a range of 0 to 249. This format can show up in subtitle files for digital cinema
     # used by CineCanvas systems
-    def parse_with_ticks(tc_with_ticks, fps = DEFAULT_FPS)
+    def parse_with_ticks(tc_with_ticks, fps = DEFAULT_FPS, allow_inaccurate = true)
       ticks_expr = /(\d{3})$/
       num_ticks = tc_with_ticks.scan(ticks_expr).join.to_i
 
       raise RangeError, "Invalid tick count #{num_ticks}" if num_ticks > 249
 
       seconds_per_frame = 1.0 / fps
-      frame_idx = ( (num_ticks * 0.004) / seconds_per_frame ).floor
+      frame_idx = (num_ticks * 0.004) / seconds_per_frame
+
+      if frame_idx.floor != frame_idx
+        if allow_inaccurate
+          frame_idx = frame_idx.floor
+        else
+          raise CannotParse, "'#{num_ticks}' isn't supported since at this frame rate '#{fps}' it doesn't give an integer for the number of frames"
+        end
+      end
+
       tc_with_frameno = tc_with_ticks.gsub(ticks_expr, "%02d" % frame_idx)
 
       parse(tc_with_frameno, fps)
@@ -273,7 +295,10 @@ class Timecode
     # create a timecode from the number of seconds. This is how current time is supplied by
     # QuickTime and other systems which have non-frame-based timescales
     def from_seconds(seconds_float, the_fps = DEFAULT_FPS, drop_frame = false)
-      total_frames = (seconds_float.to_f * the_fps.to_f).round.to_i
+      total_frames = seconds_float.to_f * the_fps.to_f
+      if drop_frame
+        total_frames = total_frames.round.to_i
+      end
       new(total_frames, the_fps, drop_frame)
     end
 
@@ -312,7 +337,7 @@ class Timecode
   def total
     to_f
   end
-  
+
   # get DF
   def drop?
     @drop_frame
@@ -376,14 +401,14 @@ class Timecode
   def to_s
     vs = value_parts
     vs[0] = vs[0] % 100 # Rollover any values > 99
-    (@drop_frame ? WITH_FRAMES_DF : WITH_FRAMES) % vs 
+    (@drop_frame ? WITH_FRAMES_DF : WITH_FRAMES) % vs
   end
-  
+
   # Get formatted SMPTE timecode. Hours might be larger than 99 and will not roll over
   def to_s_without_rollover
     WITH_FRAMES % value_parts
   end
-  
+
   # get total frames as float
   def to_f
     @total
@@ -391,7 +416,7 @@ class Timecode
 
   # get total frames as integer
   def to_i
-    @total
+    @total.to_i
   end
 
   # add number of frames (or another timecode) to this one
@@ -403,7 +428,7 @@ class Timecode
         raise WrongDropFlag, "You are calculating timecodes with different drop flag values"
       else
         raise WrongFramerate, "You are calculating timecodes with different framerates"
-      end      
+      end
     else
       self.class.new(@total + arg, @fps, @drop_frame)
     end
@@ -417,14 +442,14 @@ class Timecode
 
   # Subtract a number of frames
   def -(arg)
-    if (arg.is_a?(Timecode) &&  framerate_in_delta(arg.fps, @fps) && (arg.drop? == @drop_frame))
+    if (arg.is_a?(Timecode) && framerate_in_delta(arg.fps, @fps) && (arg.drop? == @drop_frame))
       self.class.new(@total-arg.total, @fps, @drop_frame)
     elsif (arg.is_a?(Timecode))
       if (arg.drop? != @drop_frame)
         raise WrongDropFlag, "You are calculating timecodes with different drop flag values"
       else
         raise WrongFramerate, "You are calculating timecodes with different framerates"
-      end      
+      end
     else
       self.class.new(@total-arg, @fps, @drop_frame)
     end
@@ -484,30 +509,37 @@ class Timecode
   # Prepare and format the values for TC output
   def validate!
     comp = ComputationValues.new(@fps, @drop_frame)
-    
+
     frames_dropped = false
     temp_total = @total
     hrs = (temp_total / comp.frames_per_hour).floor
-    
+
     temp_total %= comp.frames_per_hour
     mins = (temp_total / comp.frames_per_10_min * 10).floor
-    
+
     temp_total %= comp.frames_per_10_min
     if (temp_total >= comp.nd_frames_per_min)
       temp_total -= comp.nd_frames_per_min
-      mins += ((temp_total / comp.frames_per_min) + 1).floor
+      if @drop_frame
+        mins += ((temp_total / comp.frames_per_min) + 1).floor
+      end
       temp_total %= comp.frames_per_min
       frames_dropped = @drop_frame
     end
-    
-    rounded_base = @fps.round
-    secs = (temp_total / rounded_base).floor
-    rest_frames = (temp_total % rounded_base).floor
-    
+
+    fps = @drop_frame ? @fps.round : @fps
+
+    secs = (temp_total / fps).floor
+    rest_frames = temp_total % fps
+
+    if @drop_frames
+      rest_frames = rest_frames.floor
+    end
+
     if frames_dropped
       rest_frames += comp.drop_count
-      if rest_frames >= rounded_base
-        rest_frames -= rounded_base
+      if rest_frames >= fps
+        rest_frames -= fps
         secs += 1
         if secs >= 60
           secs = 0
@@ -521,7 +553,7 @@ class Timecode
           end
         end
       end
-    end   
+    end
 
     self.class.validate_atoms!(hrs, mins, secs, rest_frames, @fps)
 
