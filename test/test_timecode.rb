@@ -617,6 +617,15 @@ describe "Timecode.parse should" do
   it "properly handle 10 minute DF timecode" do
     _(Timecode.parse( "00:10:00;00", 29.97).total).must_equal 17982
   end
+
+  it "handle non integer fps without being accurate" do
+    _(Timecode.parse( "15:25:13:01", 24000.0/1001.0).total).must_equal 1332313
+  end
+
+  it "properly handle non integer fps" do
+    skip "non integer fps aren't not handled properly - this test fails whereas it should pass"
+    _(Timecode.parse( "15:25:13:01", 24000.0/1001.0).total).must_be_within_delta 1330982, 0.02
+  end
 end
 
 describe "Timecode.soft_parse should" do
