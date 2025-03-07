@@ -659,6 +659,25 @@ describe "Timecode.parse should" do
 
   it "properly handle non integer fps" do
     _(Timecode.parse( "15:25:13:01", 24000.0/1001.0).total).must_be_within_delta 1330982, 0.02
+    _((Timecode.parse( "15:25:13:00", 24000.0/1001.0) + Timecode.at(0, 0, 0, 0.981, 24000.0/1001.0)).total).must_be_within_delta 1330982, 0.0001
+    _(Timecode.parse( "15:25:13:01", 30000.0/1001.0).total).must_be_within_delta 1663727, 0.28
+    _((Timecode.parse( "15:25:13:00", 30000.0/1001.0) + Timecode.at(0, 0, 0, 0.7263, 30000.0/1001.0)).total).must_be_within_delta 1663727, 0.0001
+    _(Timecode.parse( "15:25:13:01", 60000.0/1001.0).total).must_be_within_delta 3327453, 0.55
+    _((Timecode.parse( "15:25:13:00", 60000.0/1001.0) + Timecode.at(0, 0, 0, 0.45255, 60000.0/1001.0)).total).must_be_within_delta 3327453, 0.0001
+
+    _(Timecode.parse( "00:25:13:01", 24000.0/1001.0).total).must_be_within_delta 36276, 0.73
+    _((Timecode.parse( "00:25:13:00", 24000.0/1001.0) + Timecode.at(0, 0, 0, 0.2757, 24000.0/1001.0)).total).must_be_within_delta 36276, 0.0001
+    _(Timecode.parse( "00:25:13:01", 30000.0/1001.0).total).must_be_within_delta 45345, 0.66
+    _((Timecode.parse( "00:25:13:00", 30000.0/1001.0) + Timecode.at(0, 0, 0, 0.34466, 30000.0/1001.0)).total).must_be_within_delta 45345, 0.0001
+    _(Timecode.parse( "00:25:13:01", 60000.0/1001.0).total).must_be_within_delta 90690, 0.32
+    _((Timecode.parse( "00:25:13:00", 60000.0/1001.0) + Timecode.at(0, 0, 0, 0.6893, 60000.0/1001.0)).total).must_be_within_delta 90690, 0.0001
+
+    _(Timecode.parse( "00:00:13:01", 24000.0/1001.0).total).must_be_within_delta 312, 0.69
+    _((Timecode.parse( "00:00:13:00", 24000.0/1001.0) + Timecode.at(0, 0, 0, 0.3117, 24000.0/1001.0)).total).must_be_within_delta 312, 0.0001
+    _(Timecode.parse( "00:00:13:01", 30000.0/1001.0).total).must_be_within_delta 390, 0.62
+    _((Timecode.parse( "00:00:13:00", 30000.0/1001.0) + Timecode.at(0, 0, 0, 0.3896, 30000.0/1001.0)).total).must_be_within_delta 390, 0.0001
+    _(Timecode.parse( "00:00:13:01", 60000.0/1001.0).total).must_be_within_delta 780, 0.23
+    _((Timecode.parse( "00:00:13:00", 60000.0/1001.0) + Timecode.at(0, 0, 0, 0.7792, 60000.0/1001.0)).total).must_be_within_delta 780, 0.0001
   end
 end
 
